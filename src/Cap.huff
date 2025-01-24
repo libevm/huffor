@@ -1,0 +1,113 @@
+#include "./Huffpoint.huff"
+
+#define constant UNIV2_CALLBACK_FUNC_SIG = 0x10d1e85c
+#define constant UNIV2_SWAP_SIG = 0x022c0d9f
+#define constant ERC20_TRANSFER_SIG = 0xa9059cbb
+#define constant BRRRR_SIG = 0xf61d5205
+
+#define macro MAIN() = takes (0) returns (0) {
+    0x00 calldataload // [calldata @ 0x00]
+    0xE0 shr          // [func_sig]
+
+    dup1                         // [func_sig]
+    [UNIV2_CALLBACK_FUNC_SIG] eq // [is_univ2_callback_func, func_sig]
+    univ2_callback jumpi
+
+    dup1
+    [BRRRR_SIG] eq  // [is_brrrrr_fun]
+    brrrr_func jumpi
+
+    // Unknown function
+    sad_face_revert jump // reverts with a sad face by default
+
+    // ==== Jump tables ====
+
+    // univ2
+    // TODO: validation checking
+    // transfers token to recipient
+    //  - 32bytes - sender
+    //  - 32bytes - amount0Out
+    //  - 32bytes - amount1Out
+    //  - callback bytes
+    //  - 12 bytes - amountOut
+    //  - 20 bytes - receipient
+    //  - 20 bytes - token
+    univ2_callback:
+        pop
+        // CALL erc20 transfer to the receipient
+        0xc4 calldataload 0x60 shr  // [tokenAddress]
+
+        // Get recipient and amountOut
+        0xa4 calldataload dup1      // [raw_data, raw_data, tokenAddress]
+        0xa0 shr swap1              // [raw_data, amountOut, tokenAddress]
+        0x60 shl 0x60 shr           // [recipient, amountOut, tokenAddress]
+
+        // Stores function signature in memory
+        [ERC20_TRANSFER_SIG] 0x00 mstore // - function sig
+        0x20 mstore 0x40 mstore          // [tokenAddress]
+
+        // Call
+        0x00 0x44 0x1c 0x00 // [0x00, argOffset, argsSize, 0x00, tokenAddress]
+        0x00 swap5          // [tokenAddress, 0x00, argOffset, argsSize, 0x00, 0x00]
+        gas call            // [];
+        stop
+
+    // Define how "brrrrr"
+    // BRRR will call address.swap()
+    // function definition
+    //  - 20bytes  - address (pair to call swap on)
+    //  - 1byte    - bool isAmountOutToken0
+    //  - 11 bytes - amountOut
+    //  - 2bytes   - callback data length 
+    //  - Nbytes   - callback data
+    brrrr_func:
+        pop
+        0x4 calldataload        // [raw_data] Loads *after* the function signature
+        dup1 dup1               // [raw_data, raw_data, raw_data]
+        0xa8 shl 0xa8 shr       // [amountOut, raw_data, raw_data]
+        swap1                   // [raw_data, amount_out, raw_data]
+        0x60 shr                // [pair_address, amount_out, raw_data]
+        swap2                   // [raw_data, amount_out, pair_address]
+
+        // check if its token0
+        0x58 shr 0xff and       // [isAmountOutToken0, amount_out, pair_address]
+        is_token_0_out_jmp jumpi // [amount_out, pair_address]
+        is_token_1_out_jmp jump
+
+        is_token_0_out_jmp:
+            sad_face_revert jump
+
+        is_token_1_out_jmp:
+            [UNIV2_SWAP_SIG] 0x00 mstore // - function sig
+            0x00 0x20 mstore // - amount0Out (clear dirty memory)
+            0x40 mstore      // - amount1Out; [pair_address]
+            address 0x60 mstore // - recipient; [pair_address]
+            0x24 calldataload // [raw_data (bytes), pair_address]
+            0xf0 shr          // [length, pair_address]
+            dup1 dup1         // [length, length, length, pair_address]
+            // === prepare the callback bytes ====
+            0x80 0x80 mstore        // - offset?
+            0xa0 mstore             // - bytes length [length, length, pair_address]
+            0x26 0xc0 calldatacopy  // copies the callback data; [length, pair_address]
+
+            // ====
+            0xa4 add                // [args_size, pair_address]
+            0x00                    // [0x00, args_size, pair_address]
+            swap1                   // [args_size, 0x00, pair_address]
+            0x1c                    // [0x1c, args_size, 0x00, pair_address]
+            0x00 0x00               // [0x00, 0x00, 0x1c, args_size, 0x00, pair_address]
+            swap5                   // [pair_address, 0x00, 0x1c, args_size, 0x00, 0x00]
+            gas call                // [is_success]
+
+        stop
+
+    happy_face_revert:
+        0x3a 0x00 mstore8 // store ":" in memory 0x00
+        0x29 0x01 mstore8 // store "(" in memory 0x200
+        0x04 0x00 revert // revert with ":)"
+
+    sad_face_revert:
+        0x3a 0x00 mstore8 // store ":" in memory 0x00
+        0x28 0x01 mstore8 // store "(" in memory 0x200
+        0x04 0x00 revert // revert with ":("
+}
